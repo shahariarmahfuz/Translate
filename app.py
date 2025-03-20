@@ -1,71 +1,84 @@
+# app.py
 from flask import Flask, request, jsonify
-import json
+import google.generativeai as genai  # ✅ সঠিক ইম্পোর্ট মেথড
+import os
 import re
-import google.generativeai as genai  # সঠিক ইম্পোর্ট
+import json
 
 app = Flask(__name__)
 
-# সরাসরি API কী সেট করুন (প্রোডাকশনে এভয়েড করুন)
+# Configure GenAI API
 genai.configure(api_key="AIzaSyCRhglDw40RjOUEDjnVBWICC9zqO3oTcEY")  # 🔑 আপনার API কী দিয়ে রিপ্লেস করুন
+client = genai.Client()
 
 def get_translation_feedback(ban_text, eng_text):
-    model = "gemini-2.0-flash"  # মডেলের নাম আপডেট করুন
-
+    model = "gemini-2.0-flash"
+    
     contents = [
         # Correct translation example
-        {
-            "role": "user",
-            "parts": [
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(
                 "বাংলা বাক্য: তিনি কোথায় যান?\nইংরেজি অনুবাদ: Where does he go?\n"
                 "এই অনুবাদটি পরীক্ষা করে JSON ফরম্যাটে উত্তর দিন। কোনো অতিরিক্ত ব্যাখ্যা বা চিহ্ন ব্যবহার করবেন না।"
-            ],
-        },
-        {
-            "role": "model",
-            "parts": [
+            )],
+        ),
+        types.Content(
+            role="model",
+            parts=[types.Part.from_text(
                 '{"status": "correct", "message": "আপনার অনুবাদ সঠিক!", "correct_translation": "Where does he go?"}'
-            ],
-        },
+            )],
+        ),
         
         # Incorrect translation example
-        {
-            "role": "user",
-            "parts": [
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(
                 "বাংলা বাক্য: তিনি কোথায় যান?\nইংরেজি অনুবাদ: Whera duio he go?\n"
                 "এই অনুবাদটি পরীক্ষা করে JSON ফরম্যাটে উত্তর দিন। কোনো অতিরিক্ত ব্যাখ্যা বা চিহ্ন ব্যবহার করবেন না।"
-            ],
-        },
-        {
-            "role": "model",
-            "parts": [
+            )],
+        ),
+        types.Content(
+            role="model",
+            parts=[types.Part.from_text(
                 '{"status": "incorrect", "message": "আপনার অনুবাদ সঠিক হয়নি।", '
                 '"errors": {"spelling": "Wrong spelling of \'Where\' and \'do\'.", "grammar": "Incorrect subject-verb agreement."}, '
                 '"why": {"incorrect_reason": "\'Whera\' এবং \'duio\' শব্দ দুটি ভুল বানানে লেখা হয়েছে, এবং \'do\' ব্যবহৃত হয়েছে যেখানে \'does\' হওয়া উচিত।", '
                 '"correction_explanation": "\'Where\' এবং \'do\' সঠিক বানানে লিখতে হবে এবং \'he\' তৃতীয় পুরুষ একবচন বিধায় \'does\' ব্যবহার করতে হবে। তাই সঠিক অনুবাদ হবে \'Where does he go?\'"}, '
                 '"correct_translation": "Where does he go?"}'
-            ],
-        },
+            )],
+        ),
         
         # Current request
-        {
-            "role": "user",
-            "parts": [
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(
                 f"বাংলা বাক্য: {ban_text}\nইংরেজি অনুবাদ: {eng_text}\n"
                 "এই অনুবাদটি পরীক্ষা করে JSON ফরম্যাটে উত্তর দিন। কোনো অতিরিক্ত ব্যাখ্যা বা চিহ্ন ব্যবহার করবেন না।"
-            ],
-        }
+            )],
+        )
     ]
 
-    response = genai.generate_content(
-        model=model,
-        contents=contents,
+    config = types.GenerateContentConfig(
         temperature=0.3,
         top_p=0.95,
-        max_output_tokens=8192
+        max_output_tokens=8192,
+        response_mime_type="text/plain"
     )
 
+    response = client.models.generate_content_stream(
+        model=model,
+        contents=contents,
+        config=config
+    )
+
+    full_response = ""
+    for chunk in response:
+        if chunk.text:
+            full_response += chunk.text
+
     # Clean JSON response
-    clean_response = re.sub(r'^```json|```$', '', response.text, flags=re.IGNORECASE)
+    clean_response = re.sub(r'^```json|```$', '', full_response, flags=re.IGNORECASE)
     return clean_response.strip()
 
 @app.route('/translate', methods=['GET'])
