@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import json
+import uuid
 from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify
@@ -29,8 +30,11 @@ model = genai.GenerativeModel(
 
 # Store user sessions and their last active time
 user_sessions = {}
+tracking_codes = {}
+tracking_lock = threading.Lock()
 
 SESSION_TIMEOUT = timedelta(hours=6)  # Set the session timeout to 6 hours
+TRACKING_TIMEOUT = timedelta(hours=24)  # Set the tracking code timeout to 24 hours
 
 @app.route("/ai", methods=["GET"])
 def ai_response():
@@ -47,7 +51,8 @@ def ai_response():
     if user_id not in user_sessions:
         user_sessions[user_id] = {
             "history": [],
-            "last_active": datetime.now()
+            "last_active": datetime.now(),
+            "progress": 0,
         }
 
     # Update last active time
@@ -76,14 +81,25 @@ def ai_response():
 @app.route('/translate', methods=['GET'])
 def translate_check():
     """যাচাই করে বাংলা থেকে ইংরেজি অনুবাদ সঠিক কিনা"""
-    ban = request.args.get('ban')
-    eng = request.args.get('eng')
+    tracking_code = request.args.get('code')
+    eng = request.args.get('en')
     
     # প্যারামিটার চেক
-    if not ban:
-        return jsonify({"error": "Missing 'ban' parameter"}), 400
+    if not tracking_code:
+        return jsonify({"error": "Missing 'code' parameter"}), 400
     if not eng:
-        return jsonify({"error": "Missing 'eng' parameter"}), 400
+        return jsonify({"error": "Missing 'en' parameter"}), 400
+
+    # Retrieve tracking code info
+    with tracking_lock:
+        code_info = tracking_codes.pop(tracking_code, None)
+    
+    if not code_info:
+        return jsonify({"error": "Invalid or expired tracking code"}), 400
+
+    ban = code_info['bengali']
+    user_id = code_info['user_id']
+    level = code_info['level']
 
     # জেমিনি কে প্রম্পট তৈরি
     prompt = f"""**Role:** Act as a professional English teacher with 15 years experience.
@@ -127,6 +143,29 @@ Incorrect: {{
         
         # JSON পার্স করুন
         json_response = json.loads(response_text)
+
+        # Update user progress and history
+        if user_id in user_sessions:
+            user_session = user_sessions[user_id]
+            history_entry = {
+                'bengali': ban,
+                'user_translation': eng,
+                'correct': json_response.get('status') == 'correct',
+                'errors': json_response.get('errors', {}),
+                'correct_translation': json_response.get('correct_translation', ''),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            user_session['history'].append(history_entry)
+            
+            # Update progress
+            if history_entry['correct']:
+                user_session['progress'] = min(user_session['progress'] + 2, 100)
+            else:
+                user_session['progress'] = max(user_session['progress'] - 1, 0)
+
+            user_session['last_active'] = datetime.now()
+
         return jsonify(json_response)
         
     except json.JSONDecodeError:
@@ -156,16 +195,21 @@ def generate_sentence():
             "progress": 0  # ইউজারের ইংরেজি শেখার অগ্রগতি
         }
 
-    # ইউজারের পূর্ববর্তী অগ্রগতি চেক করা
-    progress = user_sessions[user_id]["progress"]
+    user_session = user_sessions[user_id]
     
     # নতুন বাক্য তৈরির জন্য প্রম্পট তৈরি
+    history_context = "Previous mistakes:\n"
+    for entry in user_session['history'][-3:]:
+        if not entry['correct']:
+            history_context += f"- {entry['errors']}\n"
+
     if level < 50:
-        prompt = f"""**Role:** Act as a professional English teacher.  
-**Task:** Generate a Bengali sentence for English translation practice based on the user's progress in learning English.
-**User's English Progress:** {progress}/100 (0 = Beginner, 100 = Fluent)
-**Difficulty Level:** {level}/100 (1=easiest, 100=hardest)
-**Requirements:**
+        prompt = f"""**User Profile:**
+- Level: {level}
+- Progress: {user_session['progress']}
+- Recent errors: {history_context if history_context else 'None'}
+
+Generate a Bengali sentence focusing on:
 1. Use {'basic' if level <20 else 'simple'} vocabulary
 2. Include {'simple' if level <30 else 'intermediate'} grammar
 3. Length: {level//2 +5} to {level//2 +15} words
@@ -176,11 +220,12 @@ def generate_sentence():
 
 **Output Format:** Only the raw Bengali sentence without punctuation/quotes"""
     else:
-        prompt = f"""**Role:** Act as a professional English teacher.  
-**Task:** Generate a Bengali sentence for English translation practice based on the user's progress in learning English.
-**User's English Progress:** {progress}/100 (0 = Beginner, 100 = Fluent)
-**Difficulty Level:** {level}/100 (1=easiest, 100=hardest)
-**Requirements:**
+        prompt = f"""**User Profile:**
+- Level: {level}
+- Progress: {user_session['progress']}
+- Recent errors: {history_context if history_context else 'None'}
+
+Generate a Bengali sentence focusing on:
 1. Use {'common' if level <70 else 'advanced'} vocabulary
 2. Include {'intermediate' if level <70 else 'complex'} grammar
 3. Length: {level//2 +5} to {level//2 +15} words
@@ -196,31 +241,48 @@ def generate_sentence():
         response = model.generate_content(prompt)
         sentence = response.text.strip(' "\n।') + '।'  # ফরম্যাট ঠিক করা
 
-        # ইউজার সেশনে বাক্য সংরক্ষণ করুন
-        user_sessions[user_id]["history"].append(sentence)
-        user_sessions[user_id]["last_active"] = datetime.now()
+        # Generate tracking code
+        tracking_code = uuid.uuid4().hex
+        with tracking_lock:
+            tracking_codes[tracking_code] = {
+                'bengali': sentence,
+                'user_id': user_id,
+                'level': level,
+                'timestamp': datetime.now()
+            }
 
-        # ইউজারের ইংরেজি শেখার অগ্রগতি আপডেট করুন (এটি কোনো প্রোগ্রেস ট্র্যাকিং মেকানিজম হতে পারে)
-        user_sessions[user_id]["progress"] += 1  # উদাহরণস্বরূপ, প্রোগ্রেস আপডেট করা হচ্ছে। এটি আরও কাস্টমাইজ করা যেতে পারে।
-
-        return jsonify({"sentence": sentence})
+        return jsonify({
+            "sentence": sentence,
+            "tracking_code": tracking_code,
+            "progress": user_session['progress']
+        })
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-        
+
 @app.route('/ping', methods=['GET'])
 def ping():
     """Simple ping endpoint to check if server is alive."""
     return jsonify({"status": "alive"})
 
-def clean_inactive_sessions():
-    """Periodically checks and removes inactive user sessions."""
+def clean_resources():
+    """Periodically checks and removes inactive user sessions and expired tracking codes."""
     while True:
-        current_time = datetime.now()
-        for user_id, session_data in list(user_sessions.items()):
-            if current_time - session_data["last_active"] > SESSION_TIMEOUT:
+        now = datetime.now()
+        
+        # Clean user sessions
+        for user_id in list(user_sessions.keys()):
+            if now - user_sessions[user_id]['last_active'] > SESSION_TIMEOUT:
                 print(f"🧹 Removing inactive session for user {user_id}")
                 del user_sessions[user_id]
+                
+        # Clean tracking codes
+        with tracking_lock:
+            for code in list(tracking_codes.keys()):
+                if now - tracking_codes[code]['timestamp'] > TRACKING_TIMEOUT:
+                    print(f"🧹 Removing expired tracking code {code}")
+                    del tracking_codes[code]
+        
         time.sleep(300)  # Check every 5 minutes
 
 def keep_alive():
@@ -238,7 +300,7 @@ def keep_alive():
             print(f"❌ Keep-Alive Error: {e}")
 
 # Run clean-up and keep-alive in separate threads
-clean_up_thread = threading.Thread(target=clean_inactive_sessions, daemon=True)
+clean_up_thread = threading.Thread(target=clean_resources, daemon=True)
 clean_up_thread.start()
 
 keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
