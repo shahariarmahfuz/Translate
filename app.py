@@ -303,7 +303,39 @@ def generate_sentence():
     # Select a topic with weighted probability
     topic = weighted_random_choice(TOPICS)
 
-    prompt = f"""**Role:** You are a helpful and experienced Bengali language tutor assisting a user in learning English. Your goal is to provide Bengali sentences that are appropriate for the user's current learning condition to help them improve their translation skills.
+    # Adjust prompt based on level
+    if level <= 10:
+        prompt = f"""**Role:** You are a helpful and experienced Bengali language tutor assisting a user in learning English. Your goal is to provide Bengali sentences that are appropriate for the user's current learning condition to help them improve their translation skills.
+
+**User Profile:**
+- Level: {level}
+- Progress: {user_session['progress']}
+- Previously used sentence types: {user_session.get('sentence_type_usage', {})}
+- Current desired sentence type: {sentence_type}
+- Topic: {topic}
+- Recent Translation Performance: {[f"- Bengali: {item['bengali']}, Correct: {item['correct']}" for item in history[-3:]]} (Last 3 attempts)
+
+**Task:** Generate a single Bengali sentence that is most suitable for the user based on their profile and recent performance. Consider the following:
+
+1.  **Appropriateness:** The sentence should be very simple and easy to understand for a beginner.
+2.  **Relevance:** The sentence should be relevant to the chosen topic ({topic}) and should aim to teach practical vocabulary and grammar.
+3.  **Everyday Use Focus:** Prioritize sentences that reflect language commonly used in daily conversations in Bangladesh.
+4.  **Sentence Type Variety:** Ensure the generated sentence aligns with the specified sentence type ({sentence_type}), contributing to a balanced learning experience across different types of sentences.
+5.  **Learning Curve:** Gradually introduce more complex vocabulary, grammar, and idioms as the user's level and progress increase. Consider the user's recent success or failure in translations when deciding on complexity.
+6.  **Uniqueness:** The sentence must be unique and should not have been presented to the user before (check against `user_session['used_sentences']`).
+7.  **Natural and Idiomatic:** Ensure the Bengali sentence sounds natural and uses common Bengali idioms where appropriate for the level.
+
+**Sentence Structure Guidelines:**
+- **Vocabulary:** basic
+- **Grammar:** simple
+- **Length:** 5 to 10 words
+- **Idioms:** no idioms
+- **Style:** everyday use
+- **Spelling:** simple
+
+**Output Format:** Only the raw Bengali sentence without leading/trailing punctuation or quotes."""
+    else:
+        prompt = f"""**Role:** You are a helpful and experienced Bengali language tutor assisting a user in learning English. Your goal is to provide Bengali sentences that are appropriate for the user's current learning condition to help them improve their translation skills.
 
 **User Profile:**
 - Level: {level}
@@ -397,7 +429,7 @@ def ping():
 
 def keep_alive():
     """Periodically pings the server to keep it alive."""
-    url = "https://new-ai-buxr.onrender.com/ping"  # Replace with your actual ping endpoint URL if different
+    url = "https://translate-vrv3.onrender.com/ping"  # Replace with your actual ping endpoint URL if different
     while True:
         time.sleep(300)  # প্রতি 5 মিনিট পর পিং করবে
         try:
@@ -405,13 +437,4 @@ def keep_alive():
             if response.status_code == 200:
                 print("✅ Keep-Alive Ping Successful")
             else:
-                print(f"⚠️ Keep-Alive Ping Failed: Status Code {response.status_code}")
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Keep-Alive Error: {e}")
-
-# Run keep-alive in a separate thread
-keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
-keep_alive_thread.start()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+                print(f"⚠️ Kee
