@@ -3,6 +3,7 @@ import threading
 import time
 import json
 import uuid
+import random
 from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify
@@ -36,6 +37,35 @@ tracking_lock = threading.Lock()
 SESSION_TIMEOUT = timedelta(hours=6)  # Set the session timeout to 6 hours
 TRACKING_TIMEOUT = timedelta(hours=24)  # Set the tracking code timeout to 24 hours
 
+# List of sentence types for variety
+SENTENCE_TYPES = [
+    "প্রশ্নবোধক",  # Interrogative
+    "মজাদার",     # Fun
+    "নরমাল",      # Normal
+    "অনুরোধ",     # Request
+    "আশ্চর্যবোধক", # Exclamatory
+]
+
+# List of topics for variety
+TOPICS = [
+    "দৈনন্দিন জীবন",  # Daily life
+    "শিক্ষা",         # Education
+    "খেলা",           # Sports
+    "প্রকৃতি",        # Nature
+    "প্রযুক্তি",      # Technology
+    "সাহিত্য",        # Literature
+]
+
+# Grammar categories to track
+GRAMMAR_CATEGORIES = [
+    "verb",         # ক্রিয়া
+    "noun",         # বিশেষ্য
+    "adjective",    # বিশেষণ
+    "tense",        # কাল
+    "punctuation",  # যতিচিহ্ন
+    "syntax",       # বাক্য গঠন
+]
+
 @app.route("/ai", methods=["GET"])
 def ai_response():
     """Handles AI response generation based on user input and session history."""
@@ -53,6 +83,9 @@ def ai_response():
             "history": [],
             "last_active": datetime.now(),
             "progress": 0,
+            "weaknesses": {category: 0 for category in GRAMMAR_CATEGORIES},  # Track user's weaknesses
+            "used_sentences": set(),  # Track used sentences to avoid repetition
+            "all_questions": [],  # Track all questions and answers
         }
 
     # Update last active time
@@ -123,8 +156,12 @@ Incorrect: {{
   "status": "incorrect",
   "message": "আপনার অনুবাদ সঠিক হয়নি।",
   "errors": {{
-    "spelling": "[বানান ভুল]",
-    "grammar": "[ব্যাকরণ ভুল]"
+    "verb": "[ক্রিয়া ভুল]",
+    "noun": "[বিশেষ্য ভুল]",
+    "adjective": "[বিশেষণ ভুল]",
+    "tense": "[কাল ভুল]",
+    "punctuation": "[যতিচিহ্ন ভুল]",
+    "syntax": "[বাক্য গঠন ভুল]"
   }},
   "why": {{
     "incorrect_reason": "[ভুলের কারণ বাংলায়]",
@@ -157,12 +194,19 @@ Incorrect: {{
             }
             
             user_session['history'].append(history_entry)
+            user_session['all_questions'].append(history_entry)  # Track all questions and answers
             
             # Update progress
             if history_entry['correct']:
                 user_session['progress'] = min(user_session['progress'] + 2, 100)
             else:
                 user_session['progress'] = max(user_session['progress'] - 1, 0)
+
+            # Track weaknesses
+            if not history_entry['correct']:
+                for error_type, error_detail in history_entry['errors'].items():
+                    if error_detail:  # If there is an error in this category
+                        user_session['weaknesses'][error_type] += 1
 
             user_session['last_active'] = datetime.now()
 
@@ -192,7 +236,10 @@ def generate_sentence():
         user_sessions[user_id] = {
             "history": [],
             "last_active": datetime.now(),
-            "progress": 0  # ইউজারের ইংরেজি শেখার অগ্রগতি
+            "progress": 0,  # ইউজারের ইংরেজি শেখার অগ্রগতি
+            "weaknesses": {category: 0 for category in GRAMMAR_CATEGORIES},  # ইউজারের দুর্বলতা ট্র্যাক করা
+            "used_sentences": set(),  # ব্যবহৃত বাক্য ট্র্যাক করা
+            "all_questions": [],  # সকল প্রশ্ন এবং উত্তর ট্র্যাক করা
         }
 
     user_session = user_sessions[user_id]
@@ -203,11 +250,23 @@ def generate_sentence():
         if not entry['correct']:
             history_context += f"- {entry['errors']}\n"
 
-    if level < 50:
-        prompt = f"""**User Profile:**
+    # Focus on user's weaknesses
+    weaknesses_context = "User's weaknesses:\n"
+    for category, count in user_session['weaknesses'].items():
+        if count > 0:
+            weaknesses_context += f"- {category}: {count} errors\n"
+
+    # Select a random sentence type and topic
+    sentence_type = random.choice(SENTENCE_TYPES)
+    topic = random.choice(TOPICS)
+
+    prompt = f"""**User Profile:**
 - Level: {level}
 - Progress: {user_session['progress']}
 - Recent errors: {history_context if history_context else 'None'}
+- Weaknesses: {weaknesses_context if weaknesses_context else 'None'}
+- Sentence type: {sentence_type}
+- Topic: {topic}
 
 Generate a Bengali sentence focusing on:
 1. Use {'basic' if level <20 else 'simple'} vocabulary
@@ -219,27 +278,19 @@ Generate a Bengali sentence focusing on:
 7. Consider the user's progress in English while creating the sentence.
 
 **Output Format:** Only the raw Bengali sentence without punctuation/quotes"""
-    else:
-        prompt = f"""**User Profile:**
-- Level: {level}
-- Progress: {user_session['progress']}
-- Recent errors: {history_context if history_context else 'None'}
-
-Generate a Bengali sentence focusing on:
-1. Use {'common' if level <70 else 'advanced'} vocabulary
-2. Include {'intermediate' if level <70 else 'complex'} grammar
-3. Length: {level//2 +5} to {level//2 +15} words
-4. Add {'1-2 idioms' if level <80 else 'more complex expressions'} 
-5. Make it {'neutral' if level <80 else 'technical/professional'} 
-6. Use challenging spellings and expressions
-7. Consider the user's progress in English while creating the sentence.
-
-**Output Format:** Only the raw Bengali sentence without punctuation/quotes"""
     
     try:
         # জেমিনি থেকে রেসপন্স নিন
         response = model.generate_content(prompt)
         sentence = response.text.strip(' "\n।') + '।'  # ফরম্যাট ঠিক করা
+
+        # Ensure the sentence is unique
+        while sentence in user_session['used_sentences']:
+            response = model.generate_content(prompt)
+            sentence = response.text.strip(' "\n।') + '।'
+
+        # Mark the sentence as used
+        user_session['used_sentences'].add(sentence)
 
         # Generate tracking code
         tracking_code = uuid.uuid4().hex
@@ -254,11 +305,31 @@ Generate a Bengali sentence focusing on:
         return jsonify({
             "sentence": sentence,
             "tracking_code": tracking_code,
-            "progress": user_session['progress']
+            "progress": user_session['progress'],
+            "sentence_type": sentence_type,
+            "topic": topic,
         })
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/progress', methods=['GET'])
+def get_progress():
+    """ইউজারের প্রোগ্রেস এবং দুর্বলতা রিপোর্ট দেখায়"""
+    user_id = request.args.get('id')
+
+    if not user_id:
+        return jsonify({"error": "Missing 'id' parameter"}), 400
+
+    if user_id not in user_sessions:
+        return jsonify({"error": "User not found"}), 404
+
+    user_session = user_sessions[user_id]
+    return jsonify({
+        "progress": user_session['progress'],
+        "weaknesses": user_session['weaknesses'],
+        "all_questions": user_session['all_questions'],
+    })
 
 @app.route('/ping', methods=['GET'])
 def ping():
