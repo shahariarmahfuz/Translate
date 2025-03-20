@@ -1,100 +1,174 @@
-from flask import Flask, request, jsonify
-import google.generativeai as genai  # ✅ সঠিক ইম্পোর্ট মেথড
 import os
-import re
+import threading
+import time
 import json
+from datetime import datetime, timedelta
+import requests
+from flask import Flask, request, jsonify
+import google.generativeai as genai
 
 app = Flask(__name__)
 
-# Configure GenAI API
-genai.configure(api_key="AIzaSyCRhglDw40RjOUEDjnVBWICC9zqO3oTcEY")  # 🔑 আপনার API কী দিয়ে রিপ্লেস করুন
+# Configure API key securely (should be set as an environment variable)
+API_KEY = os.getenv("GENAI_API_KEY", "AIzaSyDaUj3swtOdBHSu-Jm_hP6nQuDiALHgsTY")
+genai.configure(api_key=API_KEY)
 
-def get_translation_feedback(ban_text, eng_text):
-    model = "gemini-2.0-flash"
+# Set up the model with proper configuration
+generation_config = {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 40,
+    "max_output_tokens": 8192,
+    "response_mime_type": "text/plain",
+}
 
-    contents = [
-        # Correct translation example
-        genai.Content(
-            role="user",
-            parts=[genai.Part.from_text(
-                "বাংলা বাক্য: তিনি কোথায় যান?\nইংরেজি অনুবাদ: Where does he go?\n"
-                "এই অনুবাদটি পরীক্ষা করে JSON ফরম্যাটে উত্তর দিন। কোনো অতিরিক্ত ব্যাখ্যা বা চিহ্ন ব্যবহার করবেন না।"
-            )],
-        ),
-        genai.Content(
-            role="model",
-            parts=[genai.Part.from_text(
-                '{"status": "correct", "message": "আপনার অনুবাদ সঠিক!", "correct_translation": "Where does he go?"}'
-            )],
-        ),
-        
-        # Incorrect translation example
-        genai.Content(
-            role="user",
-            parts=[genai.Part.from_text(
-                "বাংলা বাক্য: তিনি কোথায় যান?\nইংরেজি অনুবাদ: Whera duio he go?\n"
-                "এই অনুবাদটি পরীক্ষা করে JSON ফরম্যাটে উত্তর দিন। কোনো অতিরিক্ত ব্যাখ্যা বা চিহ্ন ব্যবহার করবেন না।"
-            )],
-        ),
-        genai.Content(
-            role="model",
-            parts=[genai.Part.from_text(
-                '{"status": "incorrect", "message": "আপনার অনুবাদ সঠিক হয়নি।", '
-                '"errors": {"spelling": "Wrong spelling of \'Where\' and \'do\'.", "grammar": "Incorrect subject-verb agreement."}, '
-                '"why": {"incorrect_reason": "\'Whera\' এবং \'duio\' শব্দ দুটি ভুল বানানে লেখা হয়েছে, এবং \'do\' ব্যবহৃত হয়েছে যেখানে \'does\' হওয়া উচিত।", '
-                '"correction_explanation": "\'Where\' এবং \'do\' সঠিক বানানে লিখতে হবে এবং \'he\' তৃতীয় পুরুষ একবচন বিধায় \'does\' ব্যবহার করতে হবে। তাই সঠিক অনুবাদ হবে \'Where does he go?\'"}, '
-                '"correct_translation": "Where does he go?"}'
-            )],
-        ),
-        
-        # Current request
-        genai.Content(
-            role="user",
-            parts=[genai.Part.from_text(
-                f"বাংলা বাক্য: {ban_text}\nইংরেজি অনুবাদ: {eng_text}\n"
-                "এই অনুবাদটি পরীক্ষা করে JSON ফরম্যাটে উত্তর দিন। কোনো অতিরিক্ত ব্যাখ্যা বা চিহ্ন ব্যবহার করবেন না।"
-            )],
-        )
-    ]
+model = genai.GenerativeModel(
+    model_name="gemini-2.0-flash-exp",
+    generation_config=generation_config,
+)
 
-    config = genai.GenerateContentConfig(
-        temperature=0.3,
-        top_p=0.95,
-        max_output_tokens=8192,
-        response_mime_type="text/plain"
-    )
+# Store user sessions and their last active time
+user_sessions = {}
 
-    # Assuming `generate_content_stream` is the correct method
-    response = genai.generate_content_stream(
-        model=model,
-        contents=contents,
-        config=config
-    )
+SESSION_TIMEOUT = timedelta(hours=6)  # Set the session timeout to 6 hours
 
-    full_response = ""
-    for chunk in response:
-        if chunk.text:
-            full_response += chunk.text
+@app.route("/ai", methods=["GET"])
+def ai_response():
+    """Handles AI response generation based on user input and session history."""
+    question = request.args.get("q")
+    user_id = request.args.get("id")
 
-    # Clean JSON response
-    clean_response = re.sub(r'^```json|```$', '', full_response, flags=re.IGNORECASE)
-    return clean_response.strip()
+    if not question:
+        return jsonify({"error": "Missing 'q' parameter"}), 400
+    if not user_id:
+        return jsonify({"error": "Missing 'id' parameter"}), 400
 
-@app.route('/translate', methods=['GET'])
-def handle_translation():
-    ban_text = request.args.get('ban')
-    eng_text = request.args.get('eng')
-    
-    if not ban_text or not eng_text:
-        return jsonify({"error": "Missing 'ban' or 'eng' parameters"}), 400
+    # Initialize session history if user is new
+    if user_id not in user_sessions:
+        user_sessions[user_id] = {
+            "history": [],
+            "last_active": datetime.now()
+        }
+
+    # Update last active time
+    user_sessions[user_id]["last_active"] = datetime.now()
+
+    # Append user message to history
+    user_sessions[user_id]["history"].append({"role": "user", "parts": [question]})
 
     try:
-        gemini_response = get_translation_feedback(ban_text, eng_text)
-        return jsonify(json.loads(gemini_response))
+        # Create chat session with user's history
+        chat_session = model.start_chat(history=user_sessions[user_id]["history"])
+
+        # Get AI response
+        response = chat_session.send_message(question)
+
+        if response.text:
+            # Append AI response to history
+            user_sessions[user_id]["history"].append({"role": "model", "parts": [response.text]})
+            return jsonify({"response": response.text})
+        else:
+            return jsonify({"error": "AI did not return any response"}), 500
+
+    except Exception as e:
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+
+@app.route('/translate', methods=['GET'])
+def translate_check():
+    """যাচাই করে বাংলা থেকে ইংরেজি অনুবাদ সঠিক কিনা"""
+    ban = request.args.get('ban')
+    eng = request.args.get('eng')
+    
+    # প্যারামিটার চেক
+    if not ban:
+        return jsonify({"error": "Missing 'ban' parameter"}), 400
+    if not eng:
+        return jsonify({"error": "Missing 'eng' parameter"}), 400
+
+    # জেমিনি কে প্রম্পট তৈরি
+    prompt = f"""**Role:** Act as a professional English teacher with 15 years experience.
+**Task:** Check if the user's English translation matches the Bengali sentence.
+**Instructions:**
+1. Analyze spelling, grammar, and meaning accuracy
+2. If incorrect, list errors in Bengali with detailed explanations
+3. Always provide the correct translation
+
+**Bengali:** {ban}
+**User's Translation:** {eng}
+
+**Output Format (STRICT JSON ONLY):**
+Correct: {{
+  "status": "correct",
+  "message": "আপনার অনুবাদ সঠিক!",
+  "correct_translation": "[সঠিক অনুবাদ]"
+}}
+
+Incorrect: {{
+  "status": "incorrect",
+  "message": "আপনার অনুবাদ সঠিক হয়নি।",
+  "errors": {{
+    "spelling": "[বানান ভুল]",
+    "grammar": "[ব্যাকরণ ভুল]"
+  }},
+  "why": {{
+    "incorrect_reason": "[ভুলের কারণ বাংলায়]",
+    "correction_explanation": "[সংশোধন সহ ব্যাখ্যা]"
+  }},
+  "correct_translation": "[সঠিক অনুবাদ]"
+}}"""
+
+    try:
+        # জেমিনি থেকে রেসপন্স নিন
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
+        
+        # JSON ক্লিনআপ
+        response_text = response_text.replace('```json', '').replace('```', '').strip()
+        
+        # JSON পার্স করুন
+        json_response = json.loads(response_text)
+        return jsonify(json_response)
+        
     except json.JSONDecodeError:
-        return jsonify({"error": "Invalid response format from AI model"}), 500
+        return jsonify({"error": "AI response format error", "raw": response_text}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+@app.route('/ping', methods=['GET'])
+def ping():
+    """Simple ping endpoint to check if server is alive."""
+    return jsonify({"status": "alive"})
+
+def clean_inactive_sessions():
+    """Periodically checks and removes inactive user sessions."""
+    while True:
+        current_time = datetime.now()
+        for user_id, session_data in list(user_sessions.items()):
+            if current_time - session_data["last_active"] > SESSION_TIMEOUT:
+                print(f"🧹 Removing inactive session for user {user_id}")
+                del user_sessions[user_id]
+        time.sleep(300)  # Check every 5 minutes
+
+def keep_alive():
+    """Periodically pings the server to keep it alive."""
+    url = "https://new-ai-buxr.onrender.com/ping"
+    while True:
+        time.sleep(300)  # প্রতি 5 মিনিট পর পিং করবে
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                print("✅ Keep-Alive Ping Successful")
+            else:
+                print(f"⚠️ Keep-Alive Ping Failed: Status Code {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Keep-Alive Error: {e}")
+
+# Run clean-up and keep-alive in separate threads
+clean_up_thread = threading.Thread(target=clean_inactive_sessions, daemon=True)
+clean_up_thread.start()
+
+keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+keep_alive_thread.start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
