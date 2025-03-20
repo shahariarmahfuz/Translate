@@ -4,7 +4,6 @@ import time
 import json
 import uuid
 import random
-import re
 from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify
@@ -18,15 +17,15 @@ genai.configure(api_key=API_KEY)
 
 # Set up the model with proper configuration
 generation_config = {
-    "temperature": 0.9,  # তাপমাত্রা কিছুটা কমানো হলো
+    "temperature": 0.9,
     "top_p": 0.95,
     "top_k": 40,
     "max_output_tokens": 8192,
     "response_mime_type": "text/plain",
 }
 
-translation_config = { # অনুবাদের জন্য আলাদা কনফিগারেশন
-    "temperature": 0.7, # অনুবাদের জন্য তাপমাত্রা আরও কমানো হলো
+translation_config = {
+    "temperature": 0.7,
     "top_p": 0.9,
     "top_k": 30,
     "max_output_tokens": 8192,
@@ -38,7 +37,7 @@ model = genai.GenerativeModel(
     generation_config=generation_config,
 )
 
-translation_model = genai.GenerativeModel( # অনুবাদের জন্য আলাদা মডেল
+translation_model = genai.GenerativeModel(
     model_name="gemini-2.0-flash-exp",
     generation_config=translation_config,
 )
@@ -47,9 +46,6 @@ translation_model = genai.GenerativeModel( # অনুবাদের জন্�
 user_sessions = {}
 tracking_codes = {}
 tracking_lock = threading.Lock()
-
-SESSION_TIMEOUT = timedelta(hours=6)  # Set the session timeout to 6 hours
-TRACKING_TIMEOUT = timedelta(hours=24)  # Set the tracking code timeout to 24 hours
 
 # Expanded list of sentence types for variety
 SENTENCE_TYPES = [
@@ -105,7 +101,7 @@ def weighted_random_choice(choices):
         cumulative_weight += choice['weight']
         if random_num < cumulative_weight:
             return choice['name']
-    return choices[-1]['name'] # Should not happen, but for safety
+    return choices[-1]['name']  # Should not happen, but for safety
 
 @app.route("/ai", methods=["GET"])
 def ai_response():
@@ -121,11 +117,11 @@ def ai_response():
     # Initialize session history if user is new
     if user_id not in user_sessions:
         user_sessions[user_id] = {
-            "history":,
+            "history": [],
             "last_active": datetime.now(),
             "progress": 0,
             "used_sentences": set(),  # Track used sentences to avoid repetition
-            "all_questions":,  # Track all questions and answers
+            "all_questions": [],  # Track all questions and answers
             "sentence_type_usage": {},  # Track usage of each sentence type
         }
 
@@ -166,7 +162,7 @@ def translate_check():
 
     # Retrieve tracking code info
     with tracking_lock:
-        code_info = tracking_codes.pop(tracking_code, None)
+        code_info = tracking_codes.get(tracking_code, None)
 
     if not code_info:
         return jsonify({"error": "Invalid or expired tracking code"}), 400
@@ -174,7 +170,7 @@ def translate_check():
     ban = code_info['bengali']
     user_id = code_info['user_id']
     level = code_info['level']
-    history = user_sessions.get(user_id, {}).get('all_questions',) # ব্যবহারকারীর অনুবাদ ইতিহাস
+    history = user_sessions.get(user_id, {}).get('all_questions', [])  # ব্যবহারকারীর অনুবাদ ইতিহাস
 
     # Enhanced prompt for more accurate translation checks with user history
     prompt = f"""**Role:** Act as a professional English teacher with 15 years of experience, specializing in Bengali to English translation. You are evaluating a user's translation as part of their language learning journey.
@@ -204,7 +200,7 @@ def translate_check():
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = translation_model.generate_content(prompt) # অনুবাদ মডেল ব্যবহার
+                response = translation_model.generate_content(prompt)  # অনুবাদ মডেল ব্যবহার
                 response_text = response.text.strip()
 
                 # Attempt to extract JSON, handling potential leading/trailing text
@@ -212,7 +208,7 @@ def translate_check():
                     start_index = response_text.find('{')
                     end_index = response_text.rfind('}')
                     if start_index != -1 and end_index != -1 and start_index < end_index:
-                        json_string = response_text[start_index : end_index + 1]
+                        json_string = response_text[start_index: end_index + 1]
                         json_response = json.loads(json_string)
                     else:
                         raise json.JSONDecodeError("No valid JSON found", response_text, 0)
@@ -267,7 +263,7 @@ def generate_sentence():
     """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে"""
     level = request.args.get('level', type=int)
     user_id = request.args.get('id')
-    history = user_sessions.get(user_id, {}).get('all_questions',) # ব্যবহারকারীর অনুবাদ ইতিহাস
+    history = user_sessions.get(user_id, {}).get('all_questions', [])  # ব্যবহারকারীর অনুবাদ ইতিহাস
 
     # ভ্যালিডেশন চেক
     if not level:
@@ -280,12 +276,12 @@ def generate_sentence():
     # ইউজার সেশন চেক করুন
     if user_id not in user_sessions:
         user_sessions[user_id] = {
-            "history":,
+            "history": [],
             "last_active": datetime.now(),
             "progress": 0,  # ইউজারের ইংরেজি শেখার অগ্রগতি
             "used_sentences": set(),  # ব্যবহৃত বাক্য ট্র্যাক করা
-            "all_questions":,  # সকল প্রশ্ন এবং উত্তর ট্র্যাক করা
-            "sentence_type_usage": {}, # ট্র্যাক করে কোন ধরনের বাক্য কতবার ব্যবহার করা হয়েছে
+            "all_questions": [],  # সকল প্রশ্ন এবং উত্তর ট্র্যাক করা
+            "sentence_type_usage": {},  # ট্র্যাক করে কোন ধরনের বাক্য কতবার ব্যবহার করা হয়েছে
         }
 
     user_session = user_sessions[user_id]
@@ -293,7 +289,7 @@ def generate_sentence():
     # Determine the next sentence type, prioritizing less used types
     available_types = [
         st for st in SENTENCE_TYPES
-        if user_session.get('sentence_type_usage', {}).get(st, 0) < len(user_session.get('all_questions',)) // len(SENTENCE_TYPES) + 1
+        if user_session.get('sentence_type_usage', {}).get(st, 0) < len(user_session.get('all_questions', [])) // len(SENTENCE_TYPES) + 1
     ]
     if not available_types:
         available_types = SENTENCE_TYPES  # Fallback if all types have been used relatively equally
@@ -347,7 +343,7 @@ def generate_sentence():
                 sentence = response.text.strip(' "\n।') + '।'
                 if sentence not in user_session['used_sentences']:
                     break
-            time.sleep(0.3) # Add a small delay between retries
+            time.sleep(0.3)  # Add a small delay between retries
 
         if not sentence:
             return jsonify({"error": "Failed to generate a unique sentence"}), 500
@@ -399,29 +395,9 @@ def ping():
     """Simple ping endpoint to check if server is alive."""
     return jsonify({"status": "alive"})
 
-def clean_resources():
-    """Periodically checks and removes inactive user sessions and expired tracking codes."""
-    while True:
-        now = datetime.now()
-
-        # Clean user sessions
-        for user_id in list(user_sessions.keys()):
-            if now - user_sessions[user_id]['last_active'] > SESSION_TIMEOUT:
-                print(f"🧹 Removing inactive session for user {user_id}")
-                del user_sessions[user_id]
-
-        # Clean tracking codes
-        with tracking_lock:
-            for code in list(tracking_codes.keys()):
-                if now - tracking_codes[code]['timestamp'] > TRACKING_TIMEOUT:
-                    print(f"🧹 Removing expired tracking code {code}")
-                    del tracking_codes[code]
-
-        time.sleep(300)  # Check every 5 minutes
-
 def keep_alive():
     """Periodically pings the server to keep it alive."""
-    url = "https://new-ai-buxr.onrender.com/ping" # Replace with your actual ping endpoint URL if different
+    url = "https://new-ai-buxr.onrender.com/ping"  # Replace with your actual ping endpoint URL if different
     while True:
         time.sleep(300)  # প্রতি 5 মিনিট পর পিং করবে
         try:
@@ -433,10 +409,7 @@ def keep_alive():
         except requests.exceptions.RequestException as e:
             print(f"❌ Keep-Alive Error: {e}")
 
-# Run clean-up and keep-alive in separate threads
-clean_up_thread = threading.Thread(target=clean_resources, daemon=True)
-clean_up_thread.start()
-
+# Run keep-alive in a separate thread
 keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
 keep_alive_thread.start()
 
