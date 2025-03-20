@@ -136,7 +136,7 @@ Incorrect: {{
 
 @app.route('/get', methods=['GET'])
 def generate_sentence():
-    """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে"""
+    """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে এবং ইউজারের ইংরেজি শেখার অগ্রগতি অনুযায়ী বাক্য তৈরি করে"""
     level = request.args.get('level', type=int)
     user_id = request.args.get('id')
 
@@ -152,23 +152,45 @@ def generate_sentence():
     if user_id not in user_sessions:
         user_sessions[user_id] = {
             "history": [],
-            "last_active": datetime.now()
+            "last_active": datetime.now(),
+            "progress": 0  # ইউজারের ইংরেজি শেখার অগ্রগতি
         }
 
-    # জেমিনি কে প্রম্পট তৈরি (লেভেল অনুযায়ী কঠিনতা)
-    prompt = f"""**Role:** Act as a professional Bengali language expert.
-**Task:** Generate a Bengali sentence for English translation practice.
+    # ইউজারের পূর্ববর্তী অগ্রগতি চেক করা
+    progress = user_sessions[user_id]["progress"]
+    
+    # নতুন বাক্য তৈরির জন্য প্রম্পট তৈরি
+    if level < 50:
+        prompt = f"""**Role:** Act as a professional English teacher.  
+**Task:** Generate a Bengali sentence for English translation practice based on the user's progress in learning English.
+**User's English Progress:** {progress}/100 (0 = Beginner, 100 = Fluent)
 **Difficulty Level:** {level}/100 (1=easiest, 100=hardest)
 **Requirements:**
-1. Use {'basic' if level <20 else 'uncommon'} vocabulary
-2. Include {'simple' if level <30 else 'complex'} grammar
+1. Use {'basic' if level <20 else 'simple'} vocabulary
+2. Include {'simple' if level <30 else 'intermediate'} grammar
 3. Length: {level//2 +5} to {level//2 +15} words
-4. Add {'no idioms' if level <50 else '1-2 idioms'} 
-5. Make it {'everyday use' if level <60 else 'technical/professional'} 
+4. Add {'no idioms' if level <40 else '1-2 idioms'} 
+5. Make it {'everyday use' if level <50 else 'neutral'} 
 6. Use challenging spellings as level increases
+7. Consider the user's progress in English while creating the sentence.
 
 **Output Format:** Only the raw Bengali sentence without punctuation/quotes"""
+    else:
+        prompt = f"""**Role:** Act as a professional English teacher.  
+**Task:** Generate a Bengali sentence for English translation practice based on the user's progress in learning English.
+**User's English Progress:** {progress}/100 (0 = Beginner, 100 = Fluent)
+**Difficulty Level:** {level}/100 (1=easiest, 100=hardest)
+**Requirements:**
+1. Use {'common' if level <70 else 'advanced'} vocabulary
+2. Include {'intermediate' if level <70 else 'complex'} grammar
+3. Length: {level//2 +5} to {level//2 +15} words
+4. Add {'1-2 idioms' if level <80 else 'more complex expressions'} 
+5. Make it {'neutral' if level <80 else 'technical/professional'} 
+6. Use challenging spellings and expressions
+7. Consider the user's progress in English while creating the sentence.
 
+**Output Format:** Only the raw Bengali sentence without punctuation/quotes"""
+    
     try:
         # জেমিনি থেকে রেসপন্স নিন
         response = model.generate_content(prompt)
@@ -177,6 +199,9 @@ def generate_sentence():
         # ইউজার সেশনে বাক্য সংরক্ষণ করুন
         user_sessions[user_id]["history"].append(sentence)
         user_sessions[user_id]["last_active"] = datetime.now()
+
+        # ইউজারের ইংরেজি শেখার অগ্রগতি আপডেট করুন (এটি কোনো প্রোগ্রেস ট্র্যাকিং মেকানিজম হতে পারে)
+        user_sessions[user_id]["progress"] += 1  # উদাহরণস্বরূপ, প্রোগ্রেস আপডেট করা হচ্ছে। এটি আরও কাস্টমাইজ করা যেতে পারে।
 
         return jsonify({"sentence": sentence})
         
