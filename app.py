@@ -114,109 +114,131 @@ def ai_response():
 @app.route('/translate', methods=['GET'])
 def translate_check():
     """যাচাই করে বাংলা থেকে ইংরেজি অনুবাদ সঠিক কিনা"""
-    tracking_code = request.args.get('code')
-    eng = request.args.get('en')
-    
-    # প্যারামিটার চেক
-    if not tracking_code:
-        return jsonify({"error": "Missing 'code' parameter"}), 400
-    if not eng:
-        return jsonify({"error": "Missing 'en' parameter"}), 400
+    try:
+        tracking_code = request.args.get('code')
+        eng = request.args.get('en')
+        
+        if not tracking_code or not eng:
+            return jsonify({"error": "Missing parameters"}), 400
 
-    # Retrieve tracking code info
-    with tracking_lock:
-        code_info = tracking_codes.pop(tracking_code, None)
-    
-    if not code_info:
-        return jsonify({"error": "Invalid or expired tracking code"}), 400
+        with tracking_lock:
+            code_info = tracking_codes.pop(tracking_code, None)
+        
+        if not code_info:
+            return jsonify({"error": "Invalid or expired tracking code"}), 400
 
-    ban = code_info['bengali']
-    user_id = code_info['user_id']
-    level = code_info['level']
+        ban = code_info['bengali']
+        user_id = code_info['user_id']
+        level = code_code['level']
 
-    # জেমিনি কে প্রম্পট তৈরি
-    prompt = f"""**Role:** Act as a professional English teacher with 15 years experience.
-**Task:** Check if the user's English translation matches the Bengali sentence.
-**Instructions:**
-1. Analyze spelling, grammar, and meaning accuracy
-2. If incorrect, list errors in Bengali with detailed explanations
-3. Always provide the correct translation
+        # উন্নত প্রম্পট ডিজাইন
+        prompt = f"""**Role:** Senior English Language Examiner
+**Task:** Comprehensive Translation Validation
+**Bengali Sentence:** {ban}
+**User Translation:** {eng}
 
-**Bengali:** {ban}
-**User's Translation:** {eng}
+**Analysis Criteria:**
+1. Spelling Check (বানান যাচাই)
+2. Grammar Check (ব্যাকরণ যাচাই) - {GRAMMAR_CATEGORIES}
+3. Semantic Accuracy (অর্থের যথার্থতা)
+4. Context Preservation (প্রাসঙ্গিকতা)
 
-**Output Format (STRICT JSON ONLY):**
-Correct: {{
-  "status": "correct",
-  "message": "আপনার অনুবাদ সঠিক!",
-  "correct_translation": "[সঠিক অনুবাদ]"
-}}
+**Error Types to Identify:**
+- Spelling Mistake (বানান ভুল)
+- Verb Form Error (ক্রিয়া রূপ)
+- Tense Mismatch (কালের অমিল)
+- Preposition Error (পদান্বয়ী অব্যয়)
+- Word Order Issue (শব্দ বিন্যাস)
+- Punctuation Error (যতিচিহ্ন)
+- Articles (a/an/the) Usage
+- Plural/Singular Form (একবচন/বহুবচন)
 
-Incorrect: {{
-  "status": "incorrect",
-  "message": "আপনার অনুবাদ সঠিক হয়নি।",
+**Response Format (STRICT JSON):**
+{{
+  "status": "correct|incorrect",
+  "message": "বিস্তারিত ফিডব্যাক",
   "errors": {{
-    "verb": "[ক্রিয়া ভুল]",
-    "noun": "[বিশেষ্য ভুল]",
-    "adjective": "[বিশেষণ ভুল]",
-    "tense": "[কাল ভুল]",
-    "punctuation": "[যতিচিহ্ন ভুল]",
-    "syntax": "[বাক্য গঠন ভুল]"
+    "spelling": ["ভুল বানান", "সঠিক বানান"],
+    "grammar": {{
+      "category1": "ব্যাখ্যা",
+      "category2": "ব্যাখ্যা"
+    }},
+    "semantic": "অর্থগত পার্থক্য",
+    "context": "প্রাসঙ্গিকতা হারানো"
   }},
-  "why": {{
-    "incorrect_reason": "[ভুলের কারণ বাংলায়]",
-    "correction_explanation": "[সংশোধন সহ ব্যাখ্যা]"
-  }},
-  "correct_translation": "[সঠিক অনুবাদ]"
+  "correct_translation": "সঠিক অনুবাদ"
 }}"""
 
-    try:
-        # জেমিনি থেকে রেসপন্স নিন
         response = model.generate_content(prompt)
-        response_text = response.text.strip()
         
-        # JSON ক্লিনআপ
-        response_text = response_text.replace('```json', '').replace('```', '').strip()
-        
-        # JSON পার্স করুন
-        json_response = json.loads(response_text)
+        # JSON ভ্যালিডেশন উন্নত করা হয়েছে
+        try:
+            json_response = json.loads(response.text.strip('```json\n'))
+        except json.JSONDecodeError:
+            # ফলব্যাক পার্সিং লজিক
+            error_msg = response.text.lower()
+            errors = {}
+            
+            if 'spelling' in error_msg:
+                errors['spelling'] = ["বানান ভুল", ""]
+            if 'verb' in error_msg:
+                errors['grammar'] = {"verb": "ক্রিয়া রূপ ভুল"}
+            if 'tense' in error_msg:
+                errors['grammar'] = {"tense": "কালের অমিল"}
+            
+            json_response = {
+                "status": "incorrect",
+                "message": "ত্রুটি শনাক্ত করা হয়েছে",
+                "errors": errors,
+                "correct_translation": ""
+            }
 
-        # Update user progress and history
+        # ইউজার সেশন আপডেট
         if user_id in user_sessions:
             user_session = user_sessions[user_id]
+            
+            # এরর ক্যাটাগরাইজেশন
+            detailed_errors = {
+                'spelling': json_response.get('errors', {}).get('spelling', []),
+                'grammar': json_response.get('errors', {}).get('grammar', {}),
+                'semantic': json_response.get('errors', {}).get('semantic', ''),
+                'context': json_response.get('errors', {}).get('context', '')
+            }
+
             history_entry = {
                 'bengali': ban,
                 'user_translation': eng,
                 'correct': json_response.get('status') == 'correct',
-                'errors': json_response.get('errors', {}),
+                'errors': detailed_errors,
                 'correct_translation': json_response.get('correct_translation', ''),
                 'timestamp': datetime.now().isoformat()
             }
-            
-            user_session['history'].append(history_entry)
-            user_session['all_questions'].append(history_entry)  # Track all questions and answers
-            
-            # Update progress
+
+            # প্রোগ্রেস আপডেট লজিক
             if history_entry['correct']:
-                user_session['progress'] = min(user_session['progress'] + 2, 100)
+                user_session['progress'] += 2
             else:
-                user_session['progress'] = max(user_session['progress'] - 1, 0)
+                user_session['progress'] -= 1
+                
+                # স্পেসিফিক এরর ট্র্যাকিং
+                if detailed_errors['spelling']:
+                    user_session['weaknesses']['spelling'] += 2
+                for gram_error in detailed_errors['grammar']:
+                    user_session['weaknesses'][gram_error] += 1
 
-            # Track weaknesses
-            if not history_entry['correct']:
-                for error_type, error_detail in history_entry['errors'].items():
-                    if error_detail:  # If there is an error in this category
-                        user_session['weaknesses'][error_type] += 1
-
+            user_session['history'].append(history_entry)
             user_session['last_active'] = datetime.now()
 
         return jsonify(json_response)
         
-    except json.JSONDecodeError:
-        return jsonify({"error": "AI response format error", "raw": response_text}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        logging.error(f"Translation Error: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "পরীক্ষা প্রক্রিয়ায় সমস্যা",
+            "technical": f"{type(e).__name__}: {str(e)}"
+        }), 500
+        
 @app.route('/get', methods=['GET'])
 def generate_sentence():
     """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে এবং ইউজারের ইংরেজি শেখার অগ্রগতি অনুযায়ী বাক্য তৈরি করে"""
