@@ -57,17 +57,6 @@ TOPICS = [
     "সাহিত্য",        # Literature
 ]
 
-# Grammar categories to track
-GRAMMAR_CATEGORIES = [
-    "verb",         # ক্রিয়া
-    "noun",         # বিশেষ্য
-    "adjective",    # বিশেষণ
-    "tense",        # কাল
-    "punctuation",  # যতিচিহ্ন
-    "syntax",       # বাক্য গঠন
-    "spelling",     # বানান
-]
-
 @app.route("/ai", methods=["GET"])
 def ai_response():
     """Handles AI response generation based on user input and session history."""
@@ -85,7 +74,6 @@ def ai_response():
             "history": [],
             "last_active": datetime.now(),
             "progress": 0,
-            "weaknesses": {category: 0 for category in GRAMMAR_CATEGORIES},  # Track user's weaknesses
             "used_sentences": set(),  # Track used sentences to avoid repetition
             "all_questions": [],  # Track all questions and answers
         }
@@ -136,40 +124,21 @@ def translate_check():
     user_id = code_info['user_id']
     level = code_info['level']
 
-    # Enhanced prompt with spelling check
+    # Simplified prompt focusing only on why, correct_translation, and status
     prompt = f"""**Role:** Act as a professional English teacher with 15 years experience.
 **Task:** Check if the user's English translation matches the Bengali sentence.
 **Instructions:**
 1. Analyze spelling, grammar, and meaning accuracy
-2. If incorrect, list errors in Bengali with detailed explanations
+2. If incorrect, explain why in Bengali
 3. Always provide the correct translation
 
 **Bengali:** {ban}
 **User's Translation:** {eng}
 
 **Output Format (STRICT JSON ONLY):**
-Correct: {{
-  "status": "correct",
-  "message": "আপনার অনুবাদ সঠিক!",
-  "correct_translation": "[সঠিক অনুবাদ]"
-}}
-
-Incorrect: {{
-  "status": "incorrect",
-  "message": "আপনার অনুবাদ সঠিক হয়নি।",
-  "errors": {{
-    "verb": "[ক্রিয়া ভুল]",
-    "noun": "[বিশেষ্য ভুল]",
-    "adjective": "[বিশেষণ ভুল]",
-    "tense": "[কাল ভুল]",
-    "punctuation": "[যতিচিহ্ন ভুল]",
-    "syntax": "[বাক্য গঠন ভুল]",
-    "spelling": "[বানান ভুল]"
-  }},
-  "why": {{
-    "incorrect_reason": "[ভুলের কারণ বাংলায়]",
-    "correction_explanation": "[সংশোধন সহ ব্যাখ্যা]"
-  }},
+{{
+  "status": "correct/incorrect",
+  "why": "[ভুলের কারণ বাংলায়]",
   "correct_translation": "[সঠিক অনুবাদ]"
 }}"""
 
@@ -187,7 +156,7 @@ Incorrect: {{
                 json_response = json.loads(response_text)
 
                 # Validate response structure
-                if 'status' not in json_response:
+                if 'status' not in json_response or 'why' not in json_response or 'correct_translation' not in json_response:
                     raise ValueError("Invalid response format")
                 break
             except (json.JSONDecodeError, ValueError) as e:
@@ -199,24 +168,19 @@ Incorrect: {{
                     }), 500
                 time.sleep(0.5)
 
-        # Update user progress with error type validation
+        # Update user progress
         if user_id in user_sessions:
             user_session = user_sessions[user_id]
             history_entry = {
                 'bengali': ban,
                 'user_translation': eng,
                 'correct': json_response.get('status') == 'correct',
-                'errors': json_response.get('errors', {}),
+                'why': json_response.get('why', ''),
                 'correct_translation': json_response.get('correct_translation', ''),
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Update weaknesses with validation
-            if not history_entry['correct']:
-                for error_type, error_detail in history_entry['errors'].items():
-                    if error_detail and error_type in user_session['weaknesses']:
-                        user_session['weaknesses'][error_type] += 1
-
+            user_session['all_questions'].append(history_entry)  # Track all questions and answers
             user_session['last_active'] = datetime.now()
 
         return jsonify(json_response)
@@ -247,25 +211,12 @@ def generate_sentence():
             "history": [],
             "last_active": datetime.now(),
             "progress": 0,  # ইউজারের ইংরেজি শেখার অগ্রগতি
-            "weaknesses": {category: 0 for category in GRAMMAR_CATEGORIES},  # ইউজারের দুর্বলতা ট্র্যাক করা
             "used_sentences": set(),  # ব্যবহৃত বাক্য ট্র্যাক করা
             "all_questions": [],  # সকল প্রশ্ন এবং উত্তর ট্র্যাক করা
         }
 
     user_session = user_sessions[user_id]
     
-    # নতুন বাক্য তৈরির জন্য প্রম্পট তৈরি
-    history_context = "Previous mistakes:\n"
-    for entry in user_session['history'][-3:]:
-        if not entry['correct']:
-            history_context += f"- {entry['errors']}\n"
-
-    # Focus on user's weaknesses
-    weaknesses_context = "User's weaknesses:\n"
-    for category, count in user_session['weaknesses'].items():
-        if count > 0:
-            weaknesses_context += f"- {category}: {count} errors\n"
-
     # Select a random sentence type and topic
     sentence_type = random.choice(SENTENCE_TYPES)
     topic = random.choice(TOPICS)
@@ -273,8 +224,6 @@ def generate_sentence():
     prompt = f"""**User Profile:**
 - Level: {level}
 - Progress: {user_session['progress']}
-- Recent errors: {history_context if history_context else 'None'}
-- Weaknesses: {weaknesses_context if weaknesses_context else 'None'}
 - Sentence type: {sentence_type}
 - Topic: {topic}
 
@@ -340,7 +289,6 @@ def get_progress():
     user_session = user_sessions[user_id]
     return jsonify({
         "progress": user_session['progress'],
-        "weaknesses": user_session['weaknesses'],
         "all_questions": user_session['all_questions'],
     })
 
