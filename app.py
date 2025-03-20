@@ -134,6 +134,41 @@ Incorrect: {{
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/get', methods=['GET'])
+def generate_sentence():
+    """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে"""
+    level = request.args.get('level', type=int)
+
+    # ভ্যালিডেশন চেক
+    if not level:
+        return jsonify({"error": "Missing 'level' parameter"}), 400
+    if not 1 <= level <= 100:
+        return jsonify({"error": "Level must be between 1 and 100"}), 400
+
+    # জেমিনি কে প্রম্পট তৈরি (লেভেল অনুযায়ী কঠিনতা)
+    prompt = f"""**Role:** Act as a professional Bengali language expert.
+**Task:** Generate a Bengali sentence for English translation practice.
+**Difficulty Level:** {level}/100 (1=easiest, 100=hardest)
+**Requirements:**
+1. Use {'basic' if level <20 else 'uncommon'} vocabulary
+2. Include {'simple' if level <30 else 'complex'} grammar
+3. Length: {level//2 +5} to {level//2 +15} words
+4. Add {'no idioms' if level <50 else '1-2 idioms'} 
+5. Make it {'everyday use' if level <60 else 'technical/professional'} 
+6. Use challenging spellings as level increases
+
+**Output Format:** Only the raw Bengali sentence without punctuation/quotes"""
+
+    try:
+        # জেমিনি থেকে রেসপন্স নিন
+        response = model.generate_content(prompt)
+        sentence = response.text.strip(' "\n।') + '।'  # ফরম্যাট ঠিক করা
+        
+        return jsonify({"sentence": sentence})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/ping', methods=['GET'])
 def ping():
     """Simple ping endpoint to check if server is alive."""
