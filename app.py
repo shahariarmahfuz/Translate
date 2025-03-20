@@ -138,12 +138,22 @@ Incorrect: {{
 def generate_sentence():
     """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে"""
     level = request.args.get('level', type=int)
+    user_id = request.args.get('id')
 
     # ভ্যালিডেশন চেক
     if not level:
         return jsonify({"error": "Missing 'level' parameter"}), 400
+    if not user_id:
+        return jsonify({"error": "Missing 'id' parameter"}), 400
     if not 1 <= level <= 100:
         return jsonify({"error": "Level must be between 1 and 100"}), 400
+
+    # ইউজার সেশন চেক করুন
+    if user_id not in user_sessions:
+        user_sessions[user_id] = {
+            "history": [],
+            "last_active": datetime.now()
+        }
 
     # জেমিনি কে প্রম্পট তৈরি (লেভেল অনুযায়ী কঠিনতা)
     prompt = f"""**Role:** Act as a professional Bengali language expert.
@@ -163,12 +173,16 @@ def generate_sentence():
         # জেমিনি থেকে রেসপন্স নিন
         response = model.generate_content(prompt)
         sentence = response.text.strip(' "\n।') + '।'  # ফরম্যাট ঠিক করা
-        
+
+        # ইউজার সেশনে বাক্য সংরক্ষণ করুন
+        user_sessions[user_id]["history"].append(sentence)
+        user_sessions[user_id]["last_active"] = datetime.now()
+
         return jsonify({"sentence": sentence})
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
+        
 @app.route('/ping', methods=['GET'])
 def ping():
     """Simple ping endpoint to check if server is alive."""
