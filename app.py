@@ -3,8 +3,8 @@ import threading
 import time
 import json
 import uuid
-import logging
 import random
+import re
 from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, jsonify
@@ -65,6 +65,7 @@ GRAMMAR_CATEGORIES = [
     "tense",        # কাল
     "punctuation",  # যতিচিহ্ন
     "syntax",       # বাক্য গঠন
+    "spelling",     # বানান
 ]
 
 @app.route("/ai", methods=["GET"])
@@ -115,134 +116,120 @@ def ai_response():
 @app.route('/translate', methods=['GET'])
 def translate_check():
     """যাচাই করে বাংলা থেকে ইংরেজি অনুবাদ সঠিক কিনা"""
-    try:
-        tracking_code = request.args.get('code')
-        eng = request.args.get('en')
-        
-        if not tracking_code or not eng:
-            return jsonify({"error": "Missing parameters"}), 400
+    tracking_code = request.args.get('code')
+    eng = request.args.get('en')
+    
+    # প্যারামিটার চেক
+    if not tracking_code:
+        return jsonify({"error": "Missing 'code' parameter"}), 400
+    if not eng:
+        return jsonify({"error": "Missing 'en' parameter"}), 400
 
-        with tracking_lock:
-            code_info = tracking_codes.pop(tracking_code, None)
-        
-        if not code_info:
-            return jsonify({"error": "Invalid or expired tracking code"}), 400
+    # Retrieve tracking code info
+    with tracking_lock:
+        code_info = tracking_codes.pop(tracking_code, None)
+    
+    if not code_info:
+        return jsonify({"error": "Invalid or expired tracking code"}), 400
 
-        ban = code_info['bengali']
-        user_id = code_info['user_id']
-        level = code_code['level']
+    ban = code_info['bengali']
+    user_id = code_info['user_id']
+    level = code_info['level']
 
-        # উন্নত প্রম্পট ডিজাইন
-        prompt = f"""**Role:** Senior English Language Examiner
-**Task:** Comprehensive Translation Validation
-**Bengali Sentence:** {ban}
-**User Translation:** {eng}
+    # Enhanced prompt with spelling check
+    prompt = f"""**Role:** Act as a professional English teacher with 15 years experience.
+**Task:** Check if the user's English translation matches the Bengali sentence.
+**Instructions:**
+1. Analyze spelling, grammar, and meaning accuracy
+2. If incorrect, list errors in Bengali with detailed explanations
+3. Always provide the correct translation
 
-**Analysis Criteria:**
-1. Spelling Check (বানান যাচাই)
-2. Grammar Check (ব্যাকরণ যাচাই) - {GRAMMAR_CATEGORIES}
-3. Semantic Accuracy (অর্থের যথার্থতা)
-4. Context Preservation (প্রাসঙ্গিকতা)
+**Bengali:** {ban}
+**User's Translation:** {eng}
 
-**Error Types to Identify:**
-- Spelling Mistake (বানান ভুল)
-- Verb Form Error (ক্রিয়া রূপ)
-- Tense Mismatch (কালের অমিল)
-- Preposition Error (পদান্বয়ী অব্যয়)
-- Word Order Issue (শব্দ বিন্যাস)
-- Punctuation Error (যতিচিহ্ন)
-- Articles (a/an/the) Usage
-- Plural/Singular Form (একবচন/বহুবচন)
+**Output Format (STRICT JSON ONLY):**
+Correct: {{
+  "status": "correct",
+  "message": "আপনার অনুবাদ সঠিক!",
+  "correct_translation": "[সঠিক অনুবাদ]"
+}}
 
-**Response Format (STRICT JSON):**
-{{
-  "status": "correct|incorrect",
-  "message": "বিস্তারিত ফিডব্যাক",
+Incorrect: {{
+  "status": "incorrect",
+  "message": "আপনার অনুবাদ সঠিক হয়নি।",
   "errors": {{
-    "spelling": ["ভুল বানান", "সঠিক বানান"],
-    "grammar": {{
-      "category1": "ব্যাখ্যা",
-      "category2": "ব্যাখ্যা"
-    }},
-    "semantic": "অর্থগত পার্থক্য",
-    "context": "প্রাসঙ্গিকতা হারানো"
+    "verb": "[ক্রিয়া ভুল]",
+    "noun": "[বিশেষ্য ভুল]",
+    "adjective": "[বিশেষণ ভুল]",
+    "tense": "[কাল ভুল]",
+    "punctuation": "[যতিচিহ্ন ভুল]",
+    "syntax": "[বাক্য গঠন ভুল]",
+    "spelling": "[বানান ভুল]"
   }},
-  "correct_translation": "সঠিক অনুবাদ"
+  "why": {{
+    "incorrect_reason": "[ভুলের কারণ বাংলায়]",
+    "correction_explanation": "[সংশোধন সহ ব্যাখ্যা]"
+  }},
+  "correct_translation": "[সঠিক অনুবাদ]"
 }}"""
 
-        response = model.generate_content(prompt)
-        
-        # JSON ভ্যালিডেশন উন্নত করা হয়েছে
-        try:
-            json_response = json.loads(response.text.strip('```json\n'))
-        except json.JSONDecodeError:
-            # ফলব্যাক পার্সিং লজিক
-            error_msg = response.text.lower()
-            errors = {}
-            
-            if 'spelling' in error_msg:
-                errors['spelling'] = ["বানান ভুল", ""]
-            if 'verb' in error_msg:
-                errors['grammar'] = {"verb": "ক্রিয়া রূপ ভুল"}
-            if 'tense' in error_msg:
-                errors['grammar'] = {"tense": "কালের অমিল"}
-            
-            json_response = {
-                "status": "incorrect",
-                "message": "ত্রুটি শনাক্ত করা হয়েছে",
-                "errors": errors,
-                "correct_translation": ""
-            }
+    try:
+        # Enhanced response handling with retries
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(prompt)
+                response_text = response.text.strip()
+                
+                # Extract JSON from response
+                response_text = re.sub(r'^.*?{', '{', response_text, 1, re.DOTALL)
+                response_text = re.sub(r'}.*?$', '}', response_text, 1, re.DOTALL)
+                json_response = json.loads(response_text)
 
-        # ইউজার সেশন আপডেট
+                # Validate response structure
+                if 'status' not in json_response:
+                    raise ValueError("Invalid response format")
+                break
+            except (json.JSONDecodeError, ValueError) as e:
+                if attempt == max_retries - 1:
+                    return jsonify({
+                        "error": "AI response format error",
+                        "details": str(e),
+                        "raw_response": response_text
+                    }), 500
+                time.sleep(0.5)
+
+        # Update user progress with error type validation
         if user_id in user_sessions:
             user_session = user_sessions[user_id]
-            
-            # এরর ক্যাটাগরাইজেশন
-            detailed_errors = {
-                'spelling': json_response.get('errors', {}).get('spelling', []),
-                'grammar': json_response.get('errors', {}).get('grammar', {}),
-                'semantic': json_response.get('errors', {}).get('semantic', ''),
-                'context': json_response.get('errors', {}).get('context', '')
-            }
-
             history_entry = {
                 'bengali': ban,
                 'user_translation': eng,
                 'correct': json_response.get('status') == 'correct',
-                'errors': detailed_errors,
+                'errors': json_response.get('errors', {}),
                 'correct_translation': json_response.get('correct_translation', ''),
                 'timestamp': datetime.now().isoformat()
             }
+            
+            # Update weaknesses with validation
+            if not history_entry['correct']:
+                for error_type, error_detail in history_entry['errors'].items():
+                    if error_detail and error_type in user_session['weaknesses']:
+                        user_session['weaknesses'][error_type] += 1
 
-            # প্রোগ্রেস আপডেট লজিক
-            if history_entry['correct']:
-                user_session['progress'] += 2
-            else:
-                user_session['progress'] -= 1
-                
-                # স্পেসিফিক এরর ট্র্যাকিং
-                if detailed_errors['spelling']:
-                    user_session['weaknesses']['spelling'] += 2
-                for gram_error in detailed_errors['grammar']:
-                    user_session['weaknesses'][gram_error] += 1
-
-            user_session['history'].append(history_entry)
             user_session['last_active'] = datetime.now()
 
         return jsonify(json_response)
         
     except Exception as e:
-        logging.error(f"Translation Error: {str(e)}")
         return jsonify({
-            "status": "error",
-            "message": "পরীক্ষা প্রক্রিয়ায় সমস্যা",
-            "technical": f"{type(e).__name__}: {str(e)}"
+            "error": "Translation check failed",
+            "details": str(e)
         }), 500
-        
+
 @app.route('/get', methods=['GET'])
 def generate_sentence():
-    """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে এবং ইউজারের ইংরেজি শেখার অগ্রগতি অনুযায়ী বাক্য তৈরি করে"""
+    """যেকোনো লেভেলে বাংলা বাক্য জেনারেট করে"""
     level = request.args.get('level', type=int)
     user_id = request.args.get('id')
 
@@ -303,14 +290,17 @@ Generate a Bengali sentence focusing on:
 **Output Format:** Only the raw Bengali sentence without punctuation/quotes"""
     
     try:
-        # জেমিনি থেকে রেসপন্স নিন
-        response = model.generate_content(prompt)
-        sentence = response.text.strip(' "\n।') + '।'  # ফরম্যাট ঠিক করা
-
-        # Ensure the sentence is unique
-        while sentence in user_session['used_sentences']:
+        # Generate sentence with retry mechanism
+        max_retries = 5
+        sentence = None
+        for _ in range(max_retries):
             response = model.generate_content(prompt)
             sentence = response.text.strip(' "\n।') + '।'
+            if sentence not in user_session['used_sentences']:
+                break
+        
+        if not sentence:
+            return jsonify({"error": "Failed to generate unique sentence"}), 500
 
         # Mark the sentence as used
         user_session['used_sentences'].add(sentence)
