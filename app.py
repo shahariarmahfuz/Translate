@@ -437,4 +437,13 @@ def keep_alive():
             if response.status_code == 200:
                 print("✅ Keep-Alive Ping Successful")
             else:
-                print(f"⚠️ Kee
+                print(f"⚠️ Keep-Alive Ping Failed: Status Code {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Keep-Alive Error: {e}")
+
+# Run keep-alive in a separate thread
+keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+keep_alive_thread.start()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
